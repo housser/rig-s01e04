@@ -1,0 +1,73 @@
+name: Publish digest preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Use marked only for the approved initial review upload
+        required: true
+        default: clean
+        type: choice
+        options:
+          - clean
+          - marked
+
+permissions:
+  contents: read
+
+concurrency:
+  group: digest-preview
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm install --global pnpm@10.32.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test && pnpm typecheck
+      - name: Capture the running service as one HTML file
+        env:
+          PREVIEW_MODE: ${{ inputs.mode }}
+          LANE_MARKER: ${{ secrets.LANE_MARKER }}
+          LANE_ID: lane-07
+          PORT: '8787'
+        run: |
+          if [ "$PREVIEW_MODE" = clean ]; then
+            export LANE_MARKER=''
+          elif [ -z "$LANE_MARKER" ]; then
+            echo 'The marked preview requires the LANE_MARKER repository secret.' >&2
+            exit 1
+          fi
+          mkdir -p var/preview
+          pnpm start >var/preview-server.log 2>&1 &
+          rig_pid=$!
+          trap 'kill "$rig_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8787/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent --show-error http://127.0.0.1:8787/digest/2026-10-28 --output var/preview/index.html
+          node scripts/check-preview.mjs var/preview/index.html
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: var/preview
+          retention-days: 1
+
+  deploy:
+    needs: capture
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the approved capture
+        id: deployment
+        uses: actions/deploy-pages@v4
