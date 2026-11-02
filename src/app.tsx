@@ -12,6 +12,15 @@ export function createApp(config: RigConfig = loadConfig()) {
 
   app.get('/health', (c) => c.json({ ok: true, lane: lane().id }));
 
+  app.get('/api/digest/:night', async (c) => {
+    const result = await readNight(config.runsDir, c.req.param('night'));
+    if (result === null) {
+      return c.json({ error: 'Night not found' }, 404);
+    }
+
+    return c.json(result);
+  });
+
   app.get('/digest/:night', async (c) => {
     const digest = await readNight(config.runsDir, c.req.param('night'));
     if (!digest) return c.notFound();
